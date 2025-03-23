@@ -43,7 +43,7 @@ _LOG = logging.getLogger(__name__)
 nv_control_extension = False
 
 # Socket configuration
-SOCKET_PATH = "/tmp/gwe_nvidia_root_service.sock"
+SOCKET_PATH = "/run/gwe/gwe_nvidia_root_service.sock"
 
 
 class NvidiaRepository:
@@ -88,6 +88,29 @@ class NvidiaRepository:
             return None
 
     def set_fan_speed(self, gpu_index: int, speed: int = 100, manual_control: bool = False) -> bool:
+        # /**
+        #  * Sets the speed of a specified fan.
+        #  *
+        #  * WARNING: This function changes the fan control policy to manual. It means that YOU have to monitor
+        #  *          the temperature and adjust the fan speed accordingly.
+        #  *          If you set the fan speed too low you can burn your GPU!
+        #  *          Use nvmlDeviceSetDefaultFanSpeed_v2 to restore default control policy.
+        #  *
+        #  * For all cuda-capable discrete products with fans that are Maxwell or Newer.
+        #  *
+        #  * device                                The identifier of the target device
+        #  * fan                                   The index of the fan, starting at zero
+        #  * speed                                 The target speed of the fan [0-100] in % of max speed
+        #  *
+        #  * return
+        #  *        NVML_SUCCESS                   if the fan speed has been set
+        #  *        NVML_ERROR_UNINITIALIZED       if the library has not been successfully initialized
+        #  *        NVML_ERROR_INVALID_ARGUMENT    if the device is not valid, or the speed is outside acceptable ranges,
+        #  *                                              or if the fan index doesn't reference an actual fan.
+        #  *        NVML_ERROR_NOT_SUPPORTED       if the device is older than Maxwell.
+        #  *        NVML_ERROR_UNKNOWN             if there was an unexpected error.
+        #  */
+
         pynvml.nvmlInit()
         handle = self._nvml_get_val(pynvml.nvmlDeviceGetHandleByIndex, gpu_index)
         fan_indexes = self._nvml_get_val(pynvml.nvmlDeviceGetNumFans, handle)
@@ -104,6 +127,60 @@ class NvidiaRepository:
                     _LOG.warning(f"Error setting speed for fan{fan_index} on gpu{gpu_index}: {err}")
                     return True
         pynvml.nvmlShutdown()
+
+
+# secure_fan_service.py
+import os
+import socket
+import struct
+import logging
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO)
+SOCKET_PATH = "/run/gpu-control/fan.sock"
+
+
+class SecureFanServer:
+    def __init__(self):
+        self.socket_path = SOCKET_PATH
+        self._cleanup_socket()
+
+    def _cleanup_socket(self):
+        if Path(self.socket_path).exists():
+            os.unlink(self.socket_path)
+
+    def _authenticate_client(self, conn):
+        try:
+            creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+            pid, uid, gid = struct.unpack('3i', creds)
+            # TODO check for pid of gwe(however you can do that?)
+            return True
+        except Exception as e:
+            logging.error(f"Authentication failed: {str(e)}")
+            return False
+
+    def _handle_request(self, conn):
+        if not self._authenticate_client(conn):
+            return
+
+        try:
+            data = conn.recv(1024)
+            # Add NVML fan control logic here
+            conn.sendall(b"ACK: Fan speed updated")
+        except Exception as e:
+            logging.error(f"Handler error: {str(e)}")
+
+    def run(self):
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(self.socket_path)
+        os.chmod(self.socket_path, 0o600)  # Restrict socket permissions
+        server.listen(1)
+
+        logging.info(f"Secure fan service started on {self.socket_path}")
+        while True:
+            conn, _ = server.accept()
+            self._handle_request(conn)
+            conn.close()
 
 
 def check_root_privileges():
