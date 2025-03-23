@@ -1,8 +1,8 @@
 #!@PYTHON@
 
-# gwe-agent
+# gwe-nvidia-root-service
 #
-# Copyright (C) 2024 Roberto Leinardi <roberto@leinardi.com>
+# Copyright (C) 2025 Roberto Leinardi <roberto@leinardi.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,55 +17,36 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+
 import os
 import sys
-from pynvml import *
-from ctypes import *
 
-nvmlInit()
+sys.path.insert(1, '@PYTHON_DIR@')
 
-# Nvidia doesn't know how to make proper python bindings so we do it for them
-def DeviceSetClockOffsets(device, ctype, pstate, offset):
-    c_clockOffsetsInfo = pynvml.c_nvmlClockOffset_t()
-    c_clockOffsetsInfo.version = pynvml.nvmlClockOffset_v1
-    c_clockOffsetsInfo.type = ctype
-    c_clockOffsetsInfo.pstate = pstate
-    c_clockOffsetsInfo.clockOffsetMHz = c_int(offset)
-    fn = pynvml._nvmlGetFunctionPointer("nvmlDeviceSetClockOffsets");
-    ret = fn(device, byref(c_clockOffsetsInfo))
-    pynvml._nvmlCheckReturn(ret)
-    return ret
+VERSION = '@VERSION@'
+PKGDATA_DIR = '@PKGDATA_DIR@'
+localedir = '@localedir@'
+builddir = os.environ.get('MESON_BUILD_ROOT')
+if builddir:
+    PKGDATA_DIR = os.path.join(builddir, 'data')
+    os.environ['GSETTINGS_SCHEMA_DIR'] = PKGDATA_DIR
+    sys.dont_write_bytecode = True
+    sys.path.insert(1, os.environ['MESON_SOURCE_ROOT'])
 
-sys.stderr.write('ready\n')
-while True:
-    for line in sys.stdin:
-        splits = line[:-1].split(' ')
-        handle = nvmlDeviceGetHandleByIndex(int(splits[0]))
-        if splits[1] == 'pl':
-            try:
-                nvmlDeviceSetPowerManagementLimit(handle, int(splits[2]))
-                sys.stderr.write(str(NVML_SUCCESS) + '\n')
-            except NVMLError as err:
-                sys.stderr.write(str(err.value) + '\n')
-        elif splits[1] == 'pm':
-            try:
-                nvmlDeviceSetPersistenceMode(handle, int(splits[2]))
-                sys.stderr.write(str(NVML_SUCCESS) + '\n')
-            except NVMLError as err:
-                sys.stderr.write(str(err.value) + '\n')
-        elif splits[1] == 'gpu':
-            try:
-                #DeviceSetClockOffsets(handle, 0, 0, splits[2])
-                sys.stderr.write(str(NVML_SUCCESS) + '\n')
-            except NVMLError as err:
-                sys.stderr.write(str(err.value) + '\n')
-        elif splits[1] == 'mem':
-            try:
-                #DeviceSetClockOffsets(handle, 2, 0, c_int(splits[2]))
-                sys.stderr.write(str(NVML_SUCCESS) + '\n')
-            except NVMLError as err:
-                sys.stderr.write(str(err.value) + '\n')
-        elif splits[1] == 'quit':
-            nvmlShutdown()
-            sys.stderr.write(str(NVML_SUCCESS) + '\n')
-            exit()
+
+if __name__ == '__main__':
+    import gi
+
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('Dazzle', '1.0')
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('Notify', '0.7')
+
+    from gi.repository import Gio
+    resource = Gio.Resource.load(os.path.join(PKGDATA_DIR, 'com.leinardi.gwe.gresource'))
+    resource._register()
+
+    from gwe import __main__
+    __main__._LOG.debug("TEST 1234")
+    from gwe.repository.gwe_nvidia_root_service import main
+    sys.exit(main())

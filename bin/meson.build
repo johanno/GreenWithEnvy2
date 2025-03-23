@@ -22,6 +22,23 @@ configure_file(
   install_dir: get_option('bindir')
 )
 
+configure_file(
+  input: 'gwe-nvidia-root-service.in',
+  output: 'gwe-nvidia-root-service',
+  configuration: conf,
+  install: true,
+  install_dir: get_option('bindir')
+)
+
+configure_file(
+    input : 'com.leinardi.gwe.root_service.in',
+    output : 'gwe_root_service.service',
+    configuration : conf,
+    install : true,
+    install_dir : get_option('bindir') #'/etc/systemd/system'
+)
+
+
 gwe = join_paths(meson.build_root(), 'bin', 'gwe')
 run_target('run',
   command: [gwe]
