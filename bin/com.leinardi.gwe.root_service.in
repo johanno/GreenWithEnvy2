@@ -1,0 +1,14 @@
+
+[Unit]
+Description=GWE NVIDIA Root Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=@bindir@/gwe-nvidia-root-service
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

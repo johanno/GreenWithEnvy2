@@ -35,7 +35,7 @@ from gwe.model.overclock import Overclock
 from gwe.model.power import Power
 from gwe.model.status import Status
 from gwe.model.temp import Temp
-from gwe.repository.nvidia_client import NvidiaRootClient
+from gwe.repository.gwe_nvidia_client import NvidiaRootClient
 from gwe.util.concurrency import synchronized_with_attr
 
 _LOG = logging.getLogger(__name__)
@@ -351,7 +351,6 @@ class NvidiaRepository:
             return error
         else:
             _LOG.error("test set_fan_speed 2")
-            # TODO sepereate root code with service
             return NvidiaRootClient.set_fan_speed(gpu_index, speed, manual_control)
 
 

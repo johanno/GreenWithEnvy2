@@ -4,10 +4,9 @@ import json
 import logging
 from typing import Dict, Any, Optional
 
-_LOG = logging.getLogger(__name__)
+from gwe.repository.gwe_nvidia_root_service import SOCKET_PATH
 
-# Socket configuration - must match the server
-SOCKET_PATH = "/tmp/nvidia_root_service.sock"
+_LOG = logging.getLogger(__name__)
 
 # TODO check if service is running and if not show dialog that it can't work
 class NvidiaRootClient:

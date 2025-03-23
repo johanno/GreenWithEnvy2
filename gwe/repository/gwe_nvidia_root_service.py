@@ -1,3 +1,20 @@
+# gwe-nvidia-root-service
+#
+# Copyright (C) 2025 Roberto Leinardi <roberto@leinardi.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 import os
 import sys
 import logging
@@ -9,26 +26,24 @@ import socket
 from typing import List, Dict, Optional, Tuple, Callable, Any
 from ctypes import *
 
-from Xlib import display
-from Xlib.ext.nvcontrol import Gpu, Cooler
 from injector import singleton, inject
 import pynvml
 
-# from gwe.model.clocks import Clocks
-# from gwe.model.fan import Fan
-# from gwe.model.gpu_status import GpuStatus
-# from gwe.model.info import Info
-# from gwe.model.overclock import Overclock
-# from gwe.model.power import Power
-# from gwe.model.status import Status
-# from gwe.model.temp import Temp
+from gwe.model.clocks import Clocks
+from gwe.model.fan import Fan
+from gwe.model.gpu_status import GpuStatus
+from gwe.model.info import Info
+from gwe.model.overclock import Overclock
+from gwe.model.power import Power
+from gwe.model.status import Status
+from gwe.model.temp import Temp
 from gwe.util.concurrency import synchronized_with_attr
 
 _LOG = logging.getLogger(__name__)
 nv_control_extension = False
 
 # Socket configuration
-SOCKET_PATH = "/tmp/nvidia_root_service.sock"
+SOCKET_PATH = "/tmp/gwe_nvidia_root_service.sock"
 
 
 class NvidiaRepository:
@@ -63,8 +78,7 @@ class NvidiaRepository:
             _LOG.exception("Error while checking NVML Shared Library")
             return False
         vmajor = int(driver.split(".", 1)[0])
-        if 'WAYLAND_DISPLAY' not in os.environ and vmajor >= 535 or vmajor >= 555:
-            return True
+        return 'WAYLAND_DISPLAY' not in os.environ and vmajor >= 535 or vmajor >= 555
 
     def _nvml_get_val(self, func, *args):
         try:
@@ -176,7 +190,7 @@ def setup_socket_server():
 
 def main():
     try:
-        check_root_privileges()
+        # check_root_privileges()
         setup_logging()
 
         # Register signal handlers for graceful termination
@@ -192,7 +206,7 @@ def main():
         # Set up socket server
         server = setup_socket_server()
         _LOG.info(f"Socket server listening on {SOCKET_PATH}")
-
+        buffer_size = 4096
         # Main service loop
         while running:
             try:
@@ -204,7 +218,7 @@ def main():
                     # Receive data from client
                     data = b''
                     while True:
-                        chunk = client.recv(4096)
+                        chunk = client.recv(buffer_size)
                         if not chunk:
                             break
                         data += chunk
@@ -244,6 +258,6 @@ def main():
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
-# test with sudo python3 -m gwe.repository.nvidia_root_service
+# test with sudo python3 -m gwe.repository.gwe_nvidia_root_service
 if __name__ == '__main__':
     main()
