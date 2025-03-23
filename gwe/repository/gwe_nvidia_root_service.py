@@ -23,6 +23,8 @@ import time
 import signal
 import json
 import socket
+import struct
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Callable, Any
 from ctypes import *
 
@@ -47,7 +49,6 @@ SOCKET_PATH = "/run/gwe/gwe_nvidia_root_service.sock"
 
 
 class NvidiaRepository:
-    # TODO inject?
     @inject
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -111,76 +112,156 @@ class NvidiaRepository:
         #  *        NVML_ERROR_UNKNOWN             if there was an unexpected error.
         #  */
 
-        pynvml.nvmlInit()
-        handle = self._nvml_get_val(pynvml.nvmlDeviceGetHandleByIndex, gpu_index)
-        fan_indexes = self._nvml_get_val(pynvml.nvmlDeviceGetNumFans, handle)
-        if fan_indexes is not None and fan_indexes > 0:
-            for fan_index in range(fan_indexes):
-                try:
-                    if manual_control:
-                        ret = pynvml.nvmlDeviceSetFanSpeed_v2(handle, fan_index, speed)
-                        _LOG.error(f"test set_fan_speed 3: {ret}")
-                    else:
-                        ret = pynvml.nvmlDeviceSetDefaultFanSpeed_v2(handle, fan_index)
-                        _LOG.error(f"test set_fan_speed 4: {ret}")
-                except pynvml.NVMLError as err:
-                    _LOG.warning(f"Error setting speed for fan{fan_index} on gpu{gpu_index}: {err}")
-                    return True
-        pynvml.nvmlShutdown()
+        try:
+            pynvml.nvmlInit()
+            handle = self._nvml_get_val(pynvml.nvmlDeviceGetHandleByIndex, gpu_index)
+            fan_indexes = self._nvml_get_val(pynvml.nvmlDeviceGetNumFans, handle)
 
+            if fan_indexes is not None and fan_indexes > 0:
+                for fan_index in range(fan_indexes):
+                    try:
+                        if manual_control:
+                            ret = pynvml.nvmlDeviceSetFanSpeed_v2(handle, fan_index, speed)
+                            _LOG.info(f"Set fan{fan_index} on gpu{gpu_index} to {speed}%: {ret}")
+                        else:
+                            ret = pynvml.nvmlDeviceSetDefaultFanSpeed_v2(handle, fan_index)
+                            _LOG.info(f"Reset fan{fan_index} on gpu{gpu_index} to default: {ret}")
+                    except pynvml.NVMLError as err:
+                        _LOG.warning(f"Error setting speed for fan{fan_index} on gpu{gpu_index}: {err}")
+                        return False
 
-# secure_fan_service.py
-import os
-import socket
-import struct
-import logging
-from pathlib import Path
+                pynvml.nvmlShutdown()
+                return False
+            else:
+                _LOG.warning(f"No fans found for GPU {gpu_index}")
+                pynvml.nvmlShutdown()
+                return True
 
-logging.basicConfig(level=logging.INFO)
-SOCKET_PATH = "/run/gpu-control/fan.sock"
+        except Exception as e:
+            _LOG.exception(f"Error in set_fan_speed: {e}")
+            try:
+                pynvml.nvmlShutdown()
+            except:
+                pass
+            return True
 
 
 class SecureFanServer:
-    def __init__(self):
+    def __init__(self, nvidia_repo: NvidiaRepository):
         self.socket_path = SOCKET_PATH
+        self.nvidia_repo = nvidia_repo
         self._cleanup_socket()
+        self.running = True
 
     def _cleanup_socket(self):
+        """Remove the socket file if it already exists"""
         if Path(self.socket_path).exists():
             os.unlink(self.socket_path)
 
     def _authenticate_client(self, conn):
+        """Authenticate client using socket credentials"""
         try:
             creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
             pid, uid, gid = struct.unpack('3i', creds)
             # TODO check for pid of gwe(however you can do that?)
             return True
         except Exception as e:
-            logging.error(f"Authentication failed: {str(e)}")
+            _LOG.error(f"Authentication failed: {str(e)}")
             return False
 
     def _handle_request(self, conn):
+        """Handle client requests"""
         if not self._authenticate_client(conn):
+            conn.sendall(json.dumps({'success': False, 'error': 'Authentication failed'}).encode('utf-8'))
             return
 
         try:
-            data = conn.recv(1024)
-            # Add NVML fan control logic here
-            conn.sendall(b"ACK: Fan speed updated")
+            # Receive data with a buffer
+            buffer_size = 4096
+            data = b''
+            while True:
+                chunk = conn.recv(buffer_size)
+                if not chunk:
+                    break
+                data += chunk
+
+            if data:
+                request = json.loads(data.decode('utf-8'))
+                _LOG.info(f"Received request: {request}")
+
+                response = self._process_request(request)
+                conn.sendall(json.dumps(response).encode('utf-8'))
         except Exception as e:
-            logging.error(f"Handler error: {str(e)}")
+            _LOG.exception(f"Error handling request: {e}")
+            try:
+                conn.sendall(json.dumps({'success': False, 'error': str(e)}).encode('utf-8'))
+            except:
+                pass
+
+    def _process_request(self, request):
+        """Process the client request and execute the appropriate function"""
+        try:
+            command = request.get('command')
+            params = request.get('params', {})
+
+            if command == 'set_fan_speed':
+                gpu_index = params.get('gpu_index', 0)
+                speed = params.get('speed', 100)
+                manual_control = params.get('manual_control', True)
+
+                result = self.nvidia_repo.set_fan_speed(gpu_index, speed, manual_control)
+                return {'success': result}
+            elif command == 'has_nvml_shared_library':
+                result = self.nvidia_repo.has_nvml_shared_library()
+                return {'success': True, 'result': result}
+            elif command == 'has_min_driver_version':
+                result = self.nvidia_repo.has_min_driver_version()
+                return {'success': True, 'result': result}
+            else:
+                return {'success': False, 'error': f'Unknown command: {command}'}
+        except Exception as e:
+            _LOG.exception(f"Error processing request: {e}")
+            return {'success': False, 'error': str(e)}
 
     def run(self):
+        """Run the server main loop"""
+        # Set up the socket server
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(self.socket_path)
-        os.chmod(self.socket_path, 0o600)  # Restrict socket permissions
-        server.listen(1)
 
-        logging.info(f"Secure fan service started on {self.socket_path}")
-        while True:
-            conn, _ = server.accept()
-            self._handle_request(conn)
-            conn.close()
+        # Set permissions to allow non-root processes to connect
+        os.chmod(self.socket_path, 0o666)
+
+        server.listen(5)
+        server.settimeout(1.0)  # 1 second timeout to allow checking the running flag
+
+        _LOG.info(f"Secure fan service started on {self.socket_path}")
+
+        while self.running:
+            try:
+                # Accept connections with timeout
+                client, _ = server.accept()
+                client.settimeout(5.0)  # 5 second timeout for client operations
+
+                try:
+                    self._handle_request(client)
+                finally:
+                    client.close()
+            except socket.timeout:
+                # This is expected due to the timeout we set
+                pass
+            except Exception as e:
+                if self.running:  # Only log if we're still supposed to be running
+                    _LOG.exception(f"Error in socket server: {e}")
+
+        # Clean up
+        server.close()
+        self._cleanup_socket()
+        _LOG.info("Secure fan service shut down")
+
+    def stop(self):
+        """Stop the server"""
+        self.running = False
 
 
 def check_root_privileges():
@@ -194,17 +275,6 @@ def check_root_privileges():
         raise PermissionError("This service must be run as root")
 
 
-# Flag to control the service loop
-running = True
-
-
-def signal_handler(sig, frame):
-    """Handle termination signals to gracefully shut down the service"""
-    global running
-    print("Received termination signal. Shutting down...")
-    running = False
-
-
 def setup_logging():
     """Configure logging for the service"""
     logging.basicConfig(
@@ -216,115 +286,36 @@ def setup_logging():
     )
 
 
-def handle_client_request(repo, data):
-    """Process client requests and execute the appropriate functions"""
-    try:
-        command = data.get('command')
-        params = data.get('params', {})
-
-        if command == 'set_fan_speed':
-            gpu_index = params.get('gpu_index', 0)
-            speed = params.get('speed', 100)
-            manual_control = params.get('manual_control', True)
-
-            result = repo.set_fan_speed(gpu_index, speed, manual_control)
-            return {'success': result}
-        elif command == 'has_nvml_shared_library':
-            result = repo.has_nvml_shared_library()
-            return {'success': True, 'result': result}
-        elif command == 'has_min_driver_version':
-            result = repo.has_min_driver_version()
-            return {'success': True, 'result': result}
-        else:
-            return {'success': False, 'error': f'Unknown command: {command}'}
-    except Exception as e:
-        _LOG.exception(f"Error handling client request: {e}")
-        return {'success': False, 'error': str(e)}
-
-
-def setup_socket_server():
-    """Set up the Unix domain socket server for IPC"""
-    # Remove the socket file if it already exists
-    try:
-        if os.path.exists(SOCKET_PATH):
-            os.unlink(SOCKET_PATH)
-    except OSError as e:
-        _LOG.error(f"Error removing existing socket file: {e}")
-        sys.exit(1)
-
-    # Create the socket server
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(SOCKET_PATH)
-
-    # Set permissions to allow non-root processes to connect
-    os.chmod(SOCKET_PATH, 0o666)
-
-    server.listen(5)
-    server.settimeout(1.0)  # 1 second timeout to allow checking the running flag
-
-    return server
+def signal_handler(sig, frame, server):
+    """Handle termination signals to gracefully shut down the service"""
+    print("Received termination signal. Shutting down...")
+    server.stop()
 
 
 def main():
     try:
-        # check_root_privileges()
+        check_root_privileges()
         setup_logging()
 
-        # Register signal handlers for graceful termination
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        print("NVIDIA root service started. Running until terminated...")
-        _LOG.info("NVIDIA root service started")
+        # Create directory for socket if it doesn't exist
+        os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
 
         # Initialize repository
         repo = NvidiaRepository()
 
-        # Set up socket server
-        server = setup_socket_server()
-        _LOG.info(f"Socket server listening on {SOCKET_PATH}")
-        buffer_size = 4096
-        # Main service loop
-        while running:
-            try:
-                # Accept connections with timeout to allow checking the running flag
-                client, _ = server.accept()
-                client.settimeout(5.0)  # 5 second timeout for client operations
+        # Initialize and start the secure fan server
+        server = SecureFanServer(repo)
 
-                try:
-                    # Receive data from client
-                    data = b''
-                    while True:
-                        chunk = client.recv(buffer_size)
-                        if not chunk:
-                            break
-                        data += chunk
+        # Register signal handlers for graceful termination
+        signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, server))
+        signal.signal(signal.SIGTERM, lambda sig, frame: signal_handler(sig, frame, server))
 
-                    if data:
-                        # Parse the request
-                        request = json.loads(data.decode('utf-8'))
-                        _LOG.info(f"Received request: {request}")
+        print("NVIDIA root service started. Running until terminated...")
+        _LOG.info("NVIDIA root service started")
 
-                        # Process the request
-                        response = handle_client_request(repo, request)
+        # Run the server (this blocks until server.stop() is called)
+        server.run()
 
-                        # Send the response
-                        client.sendall(json.dumps(response).encode('utf-8'))
-                finally:
-                    client.close()
-            except socket.timeout:
-                # This is expected due to the timeout we set
-                pass
-            except Exception as e:
-                if running:  # Only log if we're still supposed to be running
-                    _LOG.exception(f"Error in socket server: {e}")
-
-        # Clean up
-        server.close()
-        if os.path.exists(SOCKET_PATH):
-            os.unlink(SOCKET_PATH)
-
-        _LOG.info("NVIDIA root service shutting down")
         print("NVIDIA root service shut down")
 
     except PermissionError as e:
@@ -334,6 +325,7 @@ def main():
         _LOG.exception("Unexpected error in NVIDIA root service")
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 # test with sudo python3 -m gwe.repository.gwe_nvidia_root_service
 if __name__ == '__main__':
