@@ -294,6 +294,7 @@ def signal_handler(sig, frame, server):
 
 def main():
     try:
+        _LOG.info("NVIDIA root service is starting ...")
         check_root_privileges()
         setup_logging()
 

@@ -333,7 +333,6 @@ class NvidiaRepository:
             self.set_fan_speed(gpu_index, manual_control=False)
 
     def set_fan_speed(self, gpu_index: int, speed: int = 100, manual_control: bool = False) -> bool:
-        _LOG.error("test set_fan_speed")
         if nv_control_extension:
             xlib_display = display.Display(self._ctrl_display)
             gpu = Gpu(gpu_index)
@@ -350,7 +349,6 @@ class NvidiaRepository:
             xlib_display.close()
             return error
         else:
-            _LOG.error("test set_fan_speed 2")
             return NvidiaRootClient.set_fan_speed(gpu_index, speed, manual_control)
 
 

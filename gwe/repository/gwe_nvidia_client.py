@@ -44,7 +44,6 @@ class NvidiaRootClient:
             # Signal end of message
             client.shutdown(socket.SHUT_WR)
 
-            # Receive the response
             data = b''
             while True:
                 try:
@@ -90,6 +89,7 @@ class NvidiaRootClient:
         Returns:
             True if successful, False otherwise
         """
+        # TODO on socket error show in UI
         response = NvidiaRootClient.send_command('set_fan_speed', {
             'gpu_index': gpu_index,
             'speed': speed,
